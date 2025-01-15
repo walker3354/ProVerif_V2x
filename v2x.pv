@@ -1,125 +1,123 @@
-(*定義通道，ch_1安全通道用於和TA溝通，提供註冊服務，ch_2用於車輛之間交換訊息，ch_3功能和ch_1一致*)
+(* Define channels, ch_1 is a secure channel for communication with TA to provide registration services, ch_2 is for inter-vehicle message exchange, ch_3 has the same functionality as ch_1 *)
 free ch_1: channel[private].
 free ch_2: channel.
 free ch_3: channel[private].
 
-(*各部件的私鑰*)
+(* Private keys for each component *)
 free p_t: bitstring[private].
 free p_v: bitstring[private].
 free p_u: bitstring[private].
 
-(*車輛傳輸的密文，用於檢測協議ˇ是否安全*)
-free s_msg:bitstring[private].
+(* Encrypted message transmitted by vehicles, used to check if the protocol is secure *)
+free s_msg: bitstring[private].
 
-(*車輛間的通訊金鑰*)
+(* Communication keys between vehicles *)
 free Sk_vu: bitstring[private].
 free Sk_uv: bitstring[private].
 
-(*車輛的ID*)
+(* Vehicle IDs *)
 const ID_v: bitstring.
 const ID_u: bitstring.
 
-(* ECC 運算 *)
+(* ECC operations *)
 const P: bitstring.
 fun mult(bitstring, bitstring): bitstring.
 
-(* 數字運算 *)
+(* Arithmetic operations *)
 fun mul(bitstring, bitstring): bitstring.
 fun add(bitstring, bitstring): bitstring.
 
-
-(* 對稱式加密 *)
+(* Symmetric encryption *)
 type key.
 fun senc(bitstring, key): bitstring.
 reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
 
-(*DHKE*)
-fun s_mul(bitstring,bitstring):key.
+(* Diffie-Hellman Key Exchange (DHKE) *)
+fun s_mul(bitstring, bitstring): key.
 
-(*event 用於判斷事件是否發生*)
+(* Events used to determine if events occur *)
 event init_proc_v(bitstring).
 event init_proc_u(bitstring).
 event term_proc_v(bitstring).
 event term_proc_u(bitstring).
 
-(*attacker 嘗試竊取指定訊息*)
-query attacker(p_t).(*各部件的私鑰*)
+(* The attacker attempts to steal specific information *)
+query attacker(p_t). (* Private key for each component *)
 query attacker(p_v).
 query attacker(p_u).
-query attacker(Sk_uv).(* 車輛間的通訊金鑰 *)
+query attacker(Sk_uv). (* Communication key between vehicles *)
 query attacker(Sk_vu).
-query attacker(s_msg).(* 隱私訊息 *)
-query x: bitstring; inj-event(term_proc_v(x)) ==> inj-event(init_proc_v(x)).(* 用於判斷事件使否有完整執行 *)
+query attacker(s_msg). (* Private message *)
+query x: bitstring; inj-event(term_proc_v(x)) ==> inj-event(init_proc_v(x)). (* Used to determine if events are executed completely *)
 query x: bitstring; inj-event(term_proc_u(x)) ==> inj-event(init_proc_u(x)).
 
-
-(*t流程*)
+(* TA process *)
 let process_t = 
-    (*生成TA的公鑰以及私鑰*)
+    (* Generate TA's public and private keys *)
     new pf: bitstring;
     new pc: bitstring;
     let p_t = mul(pf, P) in
     let Q_t = mult(p_t, P) in
 
-    (*接收到車輛 V 的註冊請求[1]，生成隨機數r_v製作車輛身分驗證參數 Ai_v 和 Ar_v*)
+    (* Receive the registration request from vehicle V [1], generate random number r_v to create authentication parameters Ai_v and Ar_v for the vehicle *)
     in(ch_1, ID_v: bitstring);
     new r_v: bitstring;
-    let Ai_v = mult(add(p_t, mult(ID_v, r_v)),P) in
+    let Ai_v = mult(add(p_t, mult(ID_v, r_v)), P) in
     let Ar_v = mult(r_v, P) in
-    (*回傳身分驗證參數給予車輛 V[2]*)
-    out(ch_1, (Ai_v, Ar_v,Q_t));
-    out(ch_3,(Q_t)).(*傳輸公鑰給予車輛u*)
+    (* Return authentication parameters to vehicle V [2] *)
+    out(ch_1, (Ai_v, Ar_v, Q_t));
+    out(ch_3, (Q_t)). (* Transmit public key to vehicle U *)
 
-(*V流程*)
-let process_v(kc:key) =
-    (*車輛V傳輸ID給T進行註冊[1],*)
+(* V process *)
+let process_v(kc: key) =
+    (* Vehicle V sends its ID to TA for registration [1] *)
     event init_proc_v(ID_v);
     out(ch_1, ID_v);
-    
-    (*接收到TA回傳的身分認證參數[2]，計算車輛私鑰p_v以及公鑰 Q_v*)
-    in(ch_1, (Ai_v: bitstring, Ar_v: bitstring, Q_t:bitstring));
+
+    (* Receive authentication parameters returned by TA [2], calculate private key p_v and public key Q_v for the vehicle *)
+    in(ch_1, (Ai_v: bitstring, Ar_v: bitstring, Q_t: bitstring));
     new rv: bitstring;
     let p_v = mul(Ai_v, rv) in
     let Q_v = mult(p_v, P) in
 
-    (*向其他車輛開始廣播[3]，使用團體金鑰kc加密車輛V的公鑰*)
+    (* Broadcast to other vehicles [3], encrypt vehicle V's public key using the group key kc *)
     let E_Q_v = senc(Q_v, kc) in
-    out(ch_2,(Ai_v, Ar_v, E_Q_v));
+    out(ch_2, (Ai_v, Ar_v, E_Q_v));
 
-    (*收到車輛 u 的加密公鑰[5]，獲取原始公鑰，並且基於DHKE生成和 u 的會話金鑰*)
+    (* Receive the encrypted public key from vehicle U [5], extract the original public key, and generate a session key with U based on DHKE *)
     in(ch_2, E_Q_u: bitstring);
     let Q_u = sdec(E_Q_u, kc) in
     let Sk_vu = s_mul(p_v, Q_u) in
 
-    (*測試會話金鑰的安全性以及一致性，接收來自車輛 u 的訊息[6]，並驗證訊息是否一致*)
+    (* Test the security and consistency of the session key, receive the message from vehicle U [6], and verify the consistency of the message *)
     in(ch_2, es_msg: bitstring);
     let temp_msg = sdec(es_msg, Sk_vu) in
     if temp_msg = s_msg then
-        event term_proc_v(ID_v).(*如果訊息一致，就會觸發event term_proc_v*)
+        event term_proc_v(ID_v). (* Trigger event term_proc_v if the message is consistent *)
 
-(*u流程*)
-let process_u (kc:key)= 
-    (*車輛U的初始化，生成自身的公鑰Q_u，向TA註冊流程省略 *)
+(* U process *)
+let process_u(kc: key) = 
+    (* Initialize vehicle U, generate its public key Q_u, and omit the registration process with TA *)
     event init_proc_u(ID_u);
     let Q_u = mult(p_u, P) in
-    in(ch_3, Q_t: bitstring);(*接收到TA的公鑰*)
+    in(ch_3, Q_t: bitstring); (* Receive TA's public key *)
 
-    (*接收到車輛 V 的廣播[4]，並使用團體金鑰解開車輛加密的公鑰Q_v*)
+    (* Receive the broadcast from vehicle V [4], decrypt the encrypted public key Q_v using the group key *)
     in(ch_2, (Ai_v: bitstring, Ar_v: bitstring, E_Q_v: bitstring));
     let Q_v = sdec(E_Q_v, kc) in
 
-    (*透過傳輸的身分驗證參數，確保V確實有經過註冊，確認通過就將自身的公鑰加密傳輸給車輛V[5]*)
-    if Ai_v = add(Q_t,mul(ID_v,Ar_v)) then
+    (* Verify that V is registered using the authentication parameters, and send its encrypted public key to vehicle V if the verification passes [5] *)
+    if Ai_v = add(Q_t, mul(ID_v, Ar_v)) then
         let E_Q_u = senc(Q_u, kc) in
-        let Sk_uv = s_mul(p_u,Q_v) in (*基於DHKE生成車輛 V 的會話金鑰*)
+        let Sk_uv = s_mul(p_u, Q_v) in (* Generate the session key for vehicle V based on DHKE *)
         out(ch_2, E_Q_u);
 
-        (*將隱私訊息透過剛剛生成的通訊金鑰進行對稱式加密，並將其傳輸給車輛V[6]*)
+        (* Encrypt the private message using the newly generated communication key and transmit it to vehicle V [6] *)
         let es_msg = senc(s_msg, Sk_uv) in
         out(ch_2, es_msg);
         event term_proc_u(ID_u).
 
-(*main process*)
+(* Main process *)
 process
     new kc: key;
-    ((!process_t)|(process_v(kc))|(process_u(kc)))
+    ((!process_t) | (process_v(kc)) | (process_u(kc)))
